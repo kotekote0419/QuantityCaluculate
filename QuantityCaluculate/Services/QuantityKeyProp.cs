@@ -9,8 +9,8 @@ namespace UFlowPlant3D.Services
     public static class QuantityKeyProp
     {
         // DWG側に「無い場合に作る」保存先
-        private const string XREC_DICT = "UFLOW";
-        private const string XREC_NAME = "QTYKEY";
+        private const string XDICT_KEY = "UFLOW";
+        private const string XREC_KEY = "QTYKEY";
         private const string XREC_LEGACY_KEY = "UFLOW:数量ID";
 
         /// <summary>
@@ -23,10 +23,17 @@ namespace UFlowPlant3D.Services
             var s = PlantProp.GetString(dlm, oid, "数量ID", "QuantityID", "QTY_ID");
             if (!string.IsNullOrWhiteSpace(s)) return s;
 
-            var fromDict = XRecordUtil.ReadString(tr, oid, XREC_DICT, XREC_NAME);
+            var fromDict = XRecordUtil.ReadString(tr, oid, XDICT_KEY, XREC_KEY);
             if (!string.IsNullOrWhiteSpace(fromDict)) return fromDict;
 
-            return XRecordUtil.ReadLegacyString(tr, oid, XREC_LEGACY_KEY) ?? "";
+            var legacy = XRecordUtil.ReadLegacyString(tr, oid, XREC_LEGACY_KEY);
+            if (!string.IsNullOrWhiteSpace(legacy))
+            {
+                XRecordUtil.WriteString(tr, oid, XDICT_KEY, XREC_KEY, legacy);
+                return legacy;
+            }
+
+            return "";
         }
 
         /// <summary>
@@ -45,8 +52,7 @@ namespace UFlowPlant3D.Services
                 return;
             }
 
-            XRecordUtil.WriteString(tr, oid, XREC_DICT, XREC_NAME, key);
-            XRecordUtil.WriteLegacyString(tr, oid, XREC_LEGACY_KEY, key);
+            XRecordUtil.WriteString(tr, oid, XDICT_KEY, XREC_KEY, key);
         }
 
         private static bool TrySetPlantProp(DataLinksManager dlm, ObjectId oid, string propName, string value)
@@ -134,18 +140,42 @@ namespace UFlowPlant3D.Services
 
     internal static class XRecordUtil
     {
+        public static string SafeDictKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return "_";
+
+            var chars = key.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                var c = chars[i];
+                bool ok = (c >= 'a' && c <= 'z') ||
+                          (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') ||
+                          c == '_';
+                if (!ok) chars[i] = '_';
+            }
+
+            return new string(chars);
+        }
+
         public static string ReadString(Transaction tr, ObjectId entId, string dictName, string recordName)
         {
             var ent = tr.GetObject(entId, OpenMode.ForRead) as Entity;
             if (ent == null || ent.ExtensionDictionary.IsNull) return null;
 
             var extDict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForRead) as DBDictionary;
-            if (extDict == null || !extDict.Contains(dictName)) return null;
+            if (extDict == null) return null;
 
-            var uflowDict = tr.GetObject(extDict.GetAt(dictName), OpenMode.ForRead) as DBDictionary;
-            if (uflowDict == null || !uflowDict.Contains(recordName)) return null;
+            var safeDictName = SafeDictKey(dictName);
+            if (!extDict.Contains(safeDictName)) return null;
 
-            var xr = tr.GetObject(uflowDict.GetAt(recordName), OpenMode.ForRead) as Xrecord;
+            var uflowDict = tr.GetObject(extDict.GetAt(safeDictName), OpenMode.ForRead) as DBDictionary;
+            if (uflowDict == null) return null;
+
+            var safeRecordName = SafeDictKey(recordName);
+            if (!uflowDict.Contains(safeRecordName)) return null;
+
+            var xr = tr.GetObject(uflowDict.GetAt(safeRecordName), OpenMode.ForRead) as Xrecord;
             if (xr?.Data == null) return null;
 
             var arr = xr.Data.AsArray();
@@ -156,42 +186,51 @@ namespace UFlowPlant3D.Services
 
         public static void WriteString(Transaction tr, ObjectId entId, string dictName, string recordName, string value)
         {
-            var ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
-            if (ent == null) return;
-
-            if (ent.ExtensionDictionary.IsNull)
-                ent.CreateExtensionDictionary();
-
-            var extDict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForWrite) as DBDictionary;
-            if (extDict == null) return;
-
-            DBDictionary uflowDict;
-            if (extDict.Contains(dictName))
+            try
             {
-                uflowDict = tr.GetObject(extDict.GetAt(dictName), OpenMode.ForWrite) as DBDictionary;
-            }
-            else
-            {
-                uflowDict = new DBDictionary();
-                extDict.SetAt(dictName, uflowDict);
-                tr.AddNewlyCreatedDBObject(uflowDict, true);
-            }
+                var ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
+                if (ent == null) return;
 
-            if (uflowDict == null) return;
+                if (ent.ExtensionDictionary.IsNull)
+                    ent.CreateExtensionDictionary();
 
-            Xrecord xr;
-            if (uflowDict.Contains(recordName))
-            {
-                xr = tr.GetObject(uflowDict.GetAt(recordName), OpenMode.ForWrite) as Xrecord;
-            }
-            else
-            {
-                xr = new Xrecord();
-                uflowDict.SetAt(recordName, xr);
-                tr.AddNewlyCreatedDBObject(xr, true);
-            }
+                var extDict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForWrite) as DBDictionary;
+                if (extDict == null) return;
 
-            xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, value ?? ""));
+                var safeDictName = SafeDictKey(dictName);
+                DBDictionary uflowDict;
+                if (extDict.Contains(safeDictName))
+                {
+                    uflowDict = tr.GetObject(extDict.GetAt(safeDictName), OpenMode.ForWrite) as DBDictionary;
+                }
+                else
+                {
+                    uflowDict = new DBDictionary();
+                    extDict.SetAt(safeDictName, uflowDict);
+                    tr.AddNewlyCreatedDBObject(uflowDict, true);
+                }
+
+                if (uflowDict == null) return;
+
+                var safeRecordName = SafeDictKey(recordName);
+                Xrecord xr;
+                if (uflowDict.Contains(safeRecordName))
+                {
+                    xr = tr.GetObject(uflowDict.GetAt(safeRecordName), OpenMode.ForWrite) as Xrecord;
+                }
+                else
+                {
+                    xr = new Xrecord();
+                    uflowDict.SetAt(safeRecordName, xr);
+                    tr.AddNewlyCreatedDBObject(xr, true);
+                }
+
+                xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, value ?? ""));
+            }
+            catch
+            {
+                // Avoid command failure even if dictionary operations fail.
+            }
         }
 
         public static string ReadLegacyString(Transaction tr, ObjectId entId, string key)
@@ -200,9 +239,12 @@ namespace UFlowPlant3D.Services
             if (ent == null || ent.ExtensionDictionary.IsNull) return null;
 
             var dict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForRead) as DBDictionary;
-            if (dict == null || !dict.Contains(key)) return null;
+            if (dict == null) return null;
 
-            var xr = tr.GetObject(dict.GetAt(key), OpenMode.ForRead) as Xrecord;
+            var safeKey = SafeDictKey(key);
+            if (!dict.Contains(safeKey)) return null;
+
+            var xr = tr.GetObject(dict.GetAt(safeKey), OpenMode.ForRead) as Xrecord;
             if (xr?.Data == null) return null;
 
             var arr = xr.Data.AsArray();
@@ -213,28 +255,36 @@ namespace UFlowPlant3D.Services
 
         public static void WriteLegacyString(Transaction tr, ObjectId entId, string key, string value)
         {
-            var ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
-            if (ent == null) return;
-
-            if (ent.ExtensionDictionary.IsNull)
-                ent.CreateExtensionDictionary();
-
-            var dict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForWrite) as DBDictionary;
-            if (dict == null) return;
-
-            Xrecord xr;
-            if (dict.Contains(key))
+            try
             {
-                xr = tr.GetObject(dict.GetAt(key), OpenMode.ForWrite) as Xrecord;
-            }
-            else
-            {
-                xr = new Xrecord();
-                dict.SetAt(key, xr);
-                tr.AddNewlyCreatedDBObject(xr, true);
-            }
+                var ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
+                if (ent == null) return;
 
-            xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, value ?? ""));
+                if (ent.ExtensionDictionary.IsNull)
+                    ent.CreateExtensionDictionary();
+
+                var dict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForWrite) as DBDictionary;
+                if (dict == null) return;
+
+                var safeKey = SafeDictKey(key);
+                Xrecord xr;
+                if (dict.Contains(safeKey))
+                {
+                    xr = tr.GetObject(dict.GetAt(safeKey), OpenMode.ForWrite) as Xrecord;
+                }
+                else
+                {
+                    xr = new Xrecord();
+                    dict.SetAt(safeKey, xr);
+                    tr.AddNewlyCreatedDBObject(xr, true);
+                }
+
+                xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, value ?? ""));
+            }
+            catch
+            {
+                // Avoid command failure even if dictionary operations fail.
+            }
         }
     }
 }
