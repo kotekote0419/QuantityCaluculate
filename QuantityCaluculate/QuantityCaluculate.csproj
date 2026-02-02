@@ -1,0 +1,52 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="accoremgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc\AcCoreMgd.dll</HintPath>
+    </Reference>
+    <Reference Include="Acdbmgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc\AcDbMgd.dll</HintPath>
+    </Reference>
+    <Reference Include="acmgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc\AcMgd.dll</HintPath>
+    </Reference>
+    <Reference Include="PnP3dConnectionManager">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnP3dConnectionManager.dll</HintPath>
+    </Reference>
+    <Reference Include="PnP3dDataLinkManager">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnP3dDataLinkManager.dll</HintPath>
+    </Reference>
+    <Reference Include="PnP3dObjectsMgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnP3dObjectsMgd.dll</HintPath>
+    </Reference>
+    <Reference Include="PnP3dPartsRepository">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnP3dPartsRepository.dll</HintPath>
+    </Reference>
+    <Reference Include="PnP3dPipeUI">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnP3dPipeUI.dll</HintPath>
+    </Reference>
+    <Reference Include="PnP3dProjectPartsMgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnP3dProjectPartsMgd.dll</HintPath>
+    </Reference>
+    <Reference Include="PnPCommonMgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnPCommonMgd.dll</HintPath>
+    </Reference>
+    <Reference Include="PnPDataLinks">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnPDataLinks.dll</HintPath>
+    </Reference>
+    <Reference Include="PnPDataObjects">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnPDataObjects.dll</HintPath>
+    </Reference>
+    <Reference Include="PnPProjectManagerMgd">
+      <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc-x64\PnPProjectManagerMgd.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
