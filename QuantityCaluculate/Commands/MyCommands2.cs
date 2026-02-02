@@ -136,16 +136,16 @@ namespace UFlowPlant3D.Commands
                 string angle = PlantProp.GetString(dlm, oid, "Angle", "角度", "PathAngle");
 
                 sw.WriteLine(string.Join(",",
-                    Csv(info.HandleString),
-                    Csv(info.EntityType),
-                    Csv(qtyKey),
-                    Csv(lineTag),
-                    Csv(matCode),
-                    Csv(itemCode),
-                    Csv(desc),
-                    Csv(size),
-                    Csv(install),
-                    Csv(angle),
+                    CsvEsc(info.HandleString),
+                    CsvEsc(info.EntityType),
+                    CsvEsc(qtyKey),
+                    CsvEsc(lineTag),
+                    CsvEsc(matCode),
+                    CsvEsc(itemCode),
+                    CsvEsc(desc),
+                    CsvEsc(size),
+                    CsvEsc(install),
+                    CsvEsc(angle),
                     CsvD(info.ND1), CsvD(info.ND2), CsvD(info.ND3),
                     CsvP(info.Start),
                     CsvP(info.Mid),
@@ -200,7 +200,7 @@ namespace UFlowPlant3D.Commands
             return new List<ObjectId>(new HashSet<ObjectId>(targets));
         }
 
-        private static string Csv(string s)
+        private static string CsvEsc(string s)
         {
             s ??= "";
             if (s.Contains(",") || s.Contains("\"") || s.Contains("\n"))
