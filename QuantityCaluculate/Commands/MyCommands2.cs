@@ -1,13 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
-
 using Autodesk.ProcessPower.DataLinks;
 using Autodesk.ProcessPower.PlantInstance;
 using Autodesk.ProcessPower.PnP3dObjects;
@@ -18,18 +16,17 @@ namespace UFlowPlant3D.Commands
     public class MyCommands2
     {
         /// <summary>
-        /// 動的に数量IDを付与（レンジ決め打ち無し）。
-        /// 既存の数量IDを尊重し、maxId+1で増分採番。
+        /// 動的に数量ID（キー文字列）を付与。
         /// Pipe/InlineAsset に加えて Fasteners も対象。
         /// </summary>
         [CommandMethod("UFLOW_ADD_QTYID_DYNAMIC")]
         public void AddQuantityIdDynamic()
         {
-            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            var doc = Application.DocumentManager.MdiActiveDocument;
             var db = doc.Database;
             var ed = doc.Editor;
 
-            var dlm = Autodesk.ProcessPower.PlantInstance.PlantApplication.CurrentProject?.ProjectParts["Piping"]?.DataLinksManager;
+            var dlm = PlantApplication.CurrentProject?.ProjectParts["Piping"]?.DataLinksManager;
             if (dlm == null)
             {
                 ed.WriteMessage("\n[UFLOW] DataLinksManagerが取得できません。");
@@ -53,15 +50,12 @@ namespace UFlowPlant3D.Commands
                     var ent = tr.GetObject(oid, OpenMode.ForRead) as Entity;
                     if (ent == null) continue;
 
-                    // キー生成
                     var key = QuantityKeyBuilder.BuildKey(dlm, oid, ent);
                     if (string.IsNullOrWhiteSpace(key)) continue;
 
-                    // 既存の数量ID（キー文字列）と同じならスキップ
                     var existing = QuantityKeyProp.Get(dlm, tr, oid);
                     if (string.Equals(existing, key, StringComparison.Ordinal)) continue;
 
-                    // 数量IDプロパティがあればそこへ、無ければDWG XRecordへ作成・保存
                     QuantityKeyProp.Set(dlm, tr, oid, key);
                     updated++;
                 }
@@ -72,9 +66,8 @@ namespace UFlowPlant3D.Commands
             ed.WriteMessage($"\n[UFLOW] 数量IDへキー反映 完了: {updated} 件");
         }
 
-
         /// <summary>
-        /// Class4.cs の考え方を踏襲して、配管/機器情報をCSVへ出力（Fasteners含む）。
+        /// 配管/機器情報をCSVへ出力（Fasteners含む）。
         /// </summary>
         [CommandMethod("UFLOW_EXPORT_COMPONENTS_CSV")]
         public void ExportComponentsCsv()
@@ -90,7 +83,6 @@ namespace UFlowPlant3D.Commands
                 return;
             }
 
-            // 保存先（ユーザに尋ねたい場合は PromptSaveFileName を追加してOK）
             string outPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
                 $"ComponentList_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
@@ -99,8 +91,8 @@ namespace UFlowPlant3D.Commands
             var targets = CollectTargets(db, dlm, ed);
 
             using var tr = db.TransactionManager.StartTransaction();
-
             using var sw = new StreamWriter(outPath, false, System.Text.Encoding.UTF8);
+
             sw.WriteLine(string.Join(",",
                 "Handle",
                 "EntityType",
@@ -129,8 +121,11 @@ namespace UFlowPlant3D.Commands
 
                 var info = GeometryService.ExtractComponentInfo(dlm, oid, ent);
 
-                // 付帯情報
                 string qtyKey = QuantityKeyProp.Get(dlm, tr, oid);
+                if (string.IsNullOrWhiteSpace(qtyKey))
+                {
+                    qtyKey = QuantityKeyBuilder.BuildKey(dlm, oid, ent);
+                }
 
                 string lineTag = PlantProp.GetString(dlm, oid, "LineNumberTag", "LineTag", "ライン番号タグ", "ライン番号");
                 string matCode = PlantProp.GetString(dlm, oid, "MaterialCode", "材料コード", "MAT_CODE");
@@ -140,11 +135,10 @@ namespace UFlowPlant3D.Commands
                 string install = PlantProp.GetString(dlm, oid, "施工方法", "Installation", "INSTALLATION");
                 string angle = PlantProp.GetString(dlm, oid, "Angle", "角度", "PathAngle");
 
-
                 sw.WriteLine(string.Join(",",
                     Csv(info.HandleString),
                     Csv(info.EntityType),
-                    key,
+                    Csv(qtyKey),
                     Csv(lineTag),
                     Csv(matCode),
                     Csv(itemCode),
@@ -168,10 +162,6 @@ namespace UFlowPlant3D.Commands
             ed.WriteMessage($"\n[UFLOW] CSV出力: {rows} 行 -> {outPath}");
         }
 
-        // -----------------------
-        // Helpers
-        // -----------------------
-
         private static List<ObjectId> CollectTargets(Database db, DataLinksManager dlm, Editor ed)
         {
             var targets = new List<ObjectId>();
@@ -189,7 +179,7 @@ namespace UFlowPlant3D.Commands
                     var ent = tr.GetObject(oid, OpenMode.ForRead) as Entity;
                     if (ent == null) continue;
 
-                    if (ent is Pipe || ent is Part) // PipeInlineAsset は Part 継承
+                    if (ent is Pipe || ent is Part)
                         targets.Add(oid);
                 }
 
@@ -202,107 +192,12 @@ namespace UFlowPlant3D.Commands
                 var fastenerIds = FastenerCollector.CollectFastenerObjectIds(dlm);
                 targets.AddRange(fastenerIds);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 ed.WriteMessage($"\n[UFLOW] Fasteners取得で例外: {ex.Message}");
             }
 
-            // 重複排除
-            var uniq = new HashSet<ObjectId>(targets);
-            return new List<ObjectId>(uniq);
-        }
-
-        /// <summary>
-        /// 既存の数量IDを尊重して Key->ID を埋める。
-        /// これにより「再実行でIDが変わる」事故を防ぐ。
-        /// </summary>
-        private static void BackfillFromExistingIds(Database db, DataLinksManager dlm, Editor ed, List<ObjectId> targets, QuantityIdStore store)
-        {
-            using var tr = db.TransactionManager.StartTransaction();
-
-            foreach (var oid in targets)
-            {
-                if (oid.IsNull || oid.IsErased) continue;
-
-                var ent = tr.GetObject(oid, OpenMode.ForRead) as Entity;
-                if (ent == null) continue;
-
-                string s = PlantProp.GetString(dlm, oid, "数量ID", "QuantityID", "QTY_ID");
-                int existing = int.TryParse(s, out var tmp) ? tmp : -1;
-                if (existing <= 0) continue;
-
-                string key = QuantityKeyBuilder.BuildKey(dlm, oid, ent);
-                if (string.IsNullOrWhiteSpace(key)) continue;
-
-                // mapに無ければ既存IDで登録（衝突はログ）
-                if (!store.Map.TryGetValue(key, out var mapped))
-                {
-                    store.Map[key] = existing;
-                }
-                else if (mapped != existing)
-                {
-                    ed.WriteMessage($"\n[UFLOW][WARN] Key衝突: {key} / mapped={mapped}, existing={existing}");
-                    // 既存のmappedを優先（必要なら運用で変更可）
-                }
-
-                store.ObserveExistingId(existing);
-            }
-
-            tr.Commit();
-        }
-
-        private static bool TrySetQuantityId(DataLinksManager dlm, ObjectId oid, int id)
-        {
-            string v = id.ToString(CultureInfo.InvariantCulture);
-
-            // RowId を取れれば優先
-            int? rowId = null;
-            try
-            {
-                var miRow = dlm.GetType().GetMethod("FindAcPpRowId", new[] { typeof(ObjectId) });
-                if (miRow != null)
-                {
-                    var tmp = miRow.Invoke(dlm, new object[] { oid });
-                    if (tmp is int i && i > 0) rowId = i;
-                }
-            }
-            catch { }
-
-            foreach (var prop in new[] { "数量ID", "QuantityID", "QTY_ID" })
-            {
-                // 1) SetProperties(int, string[], string[])
-                if (rowId.HasValue && InvokeSet(dlm, rowId.Value, new[] { prop }, new[] { v })) return true;
-                // 2) SetProperties(ObjectId, string[], string[])
-                if (InvokeSet(dlm, oid, new[] { prop }, new[] { v })) return true;
-                // 3) SetProperties(int, string[], object[])
-                if (rowId.HasValue && InvokeSet(dlm, rowId.Value, new[] { prop }, new object[] { v })) return true;
-                // 4) SetProperties(ObjectId, string[], object[])
-                if (InvokeSet(dlm, oid, new[] { prop }, new object[] { v })) return true;
-            }
-
-            return false;
-        }
-
-        private static bool InvokeSet(DataLinksManager dlm, object firstArg, string[] names, object vals)
-        {
-            try
-            {
-                foreach (var mi in dlm.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
-                {
-                    if (mi.Name != "SetProperties") continue;
-                    var ps = mi.GetParameters();
-                    if (ps.Length != 3) continue;
-
-                    if (!ps[0].ParameterType.IsInstanceOfType(firstArg)) continue;
-                    if (ps[1].ParameterType != typeof(string[])) continue;
-                    if (!ps[2].ParameterType.IsInstanceOfType(vals)) continue;
-
-                    mi.Invoke(dlm, new object[] { firstArg, names, vals });
-                    return true;
-                }
-            }
-            catch { }
-            return false;
+            return new List<ObjectId>(new HashSet<ObjectId>(targets));
         }
 
         private static string Csv(string s)
