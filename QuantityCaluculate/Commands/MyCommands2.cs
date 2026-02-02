@@ -9,6 +9,7 @@ using Autodesk.AutoCAD.Runtime;
 using Autodesk.ProcessPower.DataLinks;
 using Autodesk.ProcessPower.PlantInstance;
 using Autodesk.ProcessPower.PnP3dObjects;
+
 using UFlowPlant3D.Services;
 
 namespace UFlowPlant3D.Commands
@@ -17,7 +18,9 @@ namespace UFlowPlant3D.Commands
     {
         /// <summary>
         /// 動的に数量ID（キー文字列）を付与。
-        /// Pipe/InlineAsset に加えて Fasteners も対象。
+        /// - 既存の数量ID（キー文字列）と同じならスキップ
+        /// - 数量IDプロパティへ書けない場合はDWG XRecordへ保存
+        /// - Pipe/InlineAsset(Part) に加えて Fasteners も対象
         /// </summary>
         [CommandMethod("UFLOW_ADD_QTYID_DYNAMIC")]
         public void AddQuantityIdDynamic()
@@ -41,20 +44,30 @@ namespace UFlowPlant3D.Commands
             }
 
             int updated = 0;
+            int skipped = 0;
 
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 foreach (var oid in targets)
                 {
                     if (oid.IsNull || oid.IsErased) continue;
+
                     var ent = tr.GetObject(oid, OpenMode.ForRead) as Entity;
                     if (ent == null) continue;
 
                     var key = QuantityKeyBuilder.BuildKey(dlm, oid, ent);
-                    if (string.IsNullOrWhiteSpace(key)) continue;
+                    if (string.IsNullOrWhiteSpace(key))
+                    {
+                        skipped++;
+                        continue;
+                    }
 
                     var existing = QuantityKeyProp.Get(dlm, tr, oid);
-                    if (string.Equals(existing, key, StringComparison.Ordinal)) continue;
+                    if (string.Equals(existing, key, StringComparison.Ordinal))
+                    {
+                        skipped++;
+                        continue;
+                    }
 
                     QuantityKeyProp.Set(dlm, tr, oid, key);
                     updated++;
@@ -63,11 +76,12 @@ namespace UFlowPlant3D.Commands
                 tr.Commit();
             }
 
-            ed.WriteMessage($"\n[UFLOW] 数量IDへキー反映 完了: {updated} 件");
+            ed.WriteMessage($"\n[UFLOW] 数量IDへキー反映 完了: {updated} 件 / スキップ: {skipped} 件");
         }
 
         /// <summary>
         /// 配管/機器情報をCSVへ出力（Fasteners含む）。
+        /// QuantityId列には「キー文字列」を出す。
         /// </summary>
         [CommandMethod("UFLOW_EXPORT_COMPONENTS_CSV")]
         public void ExportComponentsCsv()
@@ -116,17 +130,19 @@ namespace UFlowPlant3D.Commands
 
             foreach (var oid in targets)
             {
+                if (oid.IsNull || oid.IsErased) continue;
+
                 var ent = tr.GetObject(oid, OpenMode.ForRead) as Entity;
                 if (ent == null) continue;
 
                 var info = GeometryService.ExtractComponentInfo(dlm, oid, ent);
 
+                // QuantityId は「数量IDプロパティ」または「XRecord退避」を優先
                 string qtyKey = QuantityKeyProp.Get(dlm, tr, oid);
                 if (string.IsNullOrWhiteSpace(qtyKey))
-                {
-                    qtyKey = QuantityKeyBuilder.BuildKey(dlm, oid, ent);
-                }
+                    qtyKey = QuantityKeyBuilder.BuildKey(dlm, oid, ent) ?? "";
 
+                // 付帯情報（候補名を複数与えてブレに強く）
                 string lineTag = PlantProp.GetString(dlm, oid, "LineNumberTag", "LineTag", "ライン番号タグ", "ライン番号");
                 string matCode = PlantProp.GetString(dlm, oid, "MaterialCode", "材料コード", "MAT_CODE");
                 string itemCode = PlantProp.GetString(dlm, oid, "ItemCode", "項目コード", "ITEM_CODE");
@@ -136,16 +152,16 @@ namespace UFlowPlant3D.Commands
                 string angle = PlantProp.GetString(dlm, oid, "Angle", "角度", "PathAngle");
 
                 sw.WriteLine(string.Join(",",
-                    Csv(info.HandleString),
-                    Csv(info.EntityType),
-                    Csv(qtyKey),
-                    Csv(lineTag),
-                    Csv(matCode),
-                    Csv(itemCode),
-                    Csv(desc),
-                    Csv(size),
-                    Csv(install),
-                    Csv(angle),
+                    CsvEsc(info.HandleString),
+                    CsvEsc(info.EntityType),
+                    CsvEsc(qtyKey),
+                    CsvEsc(lineTag),
+                    CsvEsc(matCode),
+                    CsvEsc(itemCode),
+                    CsvEsc(desc),
+                    CsvEsc(size),
+                    CsvEsc(install),
+                    CsvEsc(angle),
                     CsvD(info.ND1), CsvD(info.ND2), CsvD(info.ND3),
                     CsvP(info.Start),
                     CsvP(info.Mid),
@@ -158,15 +174,16 @@ namespace UFlowPlant3D.Commands
             }
 
             tr.Commit();
-
             ed.WriteMessage($"\n[UFLOW] CSV出力: {rows} 行 -> {outPath}");
         }
 
+        // -----------------------
+        // Collect targets
+        // -----------------------
         private static List<ObjectId> CollectTargets(Database db, DataLinksManager dlm, Editor ed)
         {
             var targets = new List<ObjectId>();
 
-            // ModelSpace: Pipe / Part（InlineAsset等）を対象
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
@@ -179,6 +196,7 @@ namespace UFlowPlant3D.Commands
                     var ent = tr.GetObject(oid, OpenMode.ForRead) as Entity;
                     if (ent == null) continue;
 
+                    // Pipe / Part（PipeInlineAssetはPart継承）
                     if (ent is Pipe || ent is Part)
                         targets.Add(oid);
                 }
@@ -186,7 +204,7 @@ namespace UFlowPlant3D.Commands
                 tr.Commit();
             }
 
-            // Fasteners: PnPDatabase.Fasteners テーブルから追加
+            // Fasteners
             try
             {
                 var fastenerIds = FastenerCollector.CollectFastenerObjectIds(dlm);
@@ -197,10 +215,14 @@ namespace UFlowPlant3D.Commands
                 ed.WriteMessage($"\n[UFLOW] Fasteners取得で例外: {ex.Message}");
             }
 
+            // 重複排除
             return new List<ObjectId>(new HashSet<ObjectId>(targets));
         }
 
-        private static string Csv(string s)
+        // -----------------------
+        // CSV helpers
+        // -----------------------
+        private static string CsvEsc(string s)
         {
             s ??= "";
             if (s.Contains(",") || s.Contains("\"") || s.Contains("\n"))
