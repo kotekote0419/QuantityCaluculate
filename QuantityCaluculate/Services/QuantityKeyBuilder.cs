@@ -1,8 +1,8 @@
-﻿// QuantityKeyBuilder.cs
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Reflection;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.ProcessPower.DataLinks;
 using Autodesk.ProcessPower.PnP3dObjects;
@@ -11,11 +11,11 @@ namespace UFlowPlant3D.Services
 {
     /// <summary>
     /// 数量IDキー生成：
-    /// - Pipe: MaterialCode + 施工方法 + Size
-    /// - Elbow: PartFamilyLongDesc + 施工方法 + Size + Angle
-    /// - Tee:   PartFamilyLongDesc + 施工方法 + RunND x BranchND（Port index: 0/1=run, 2=branch）
-    /// - Joint系: PartFamilyLongDesc + 施工方法 + Size
-    /// - その他: ItemCode + 施工方法 （無ければ Desc + 施工方法 + Size）
+    /// - Pipe:     "PIPE|MaterialCode|InstallType|Size"
+    /// - Elbow:    "ELBOW|PartFamilyLongDesc(or ItemCode)|InstallType|Size|Angle"
+    /// - Tee:      "TEE|PartFamilyLongDesc(or ItemCode)|InstallType|RunNDxBranchND"
+    /// - Fastener: "FASTENER|ItemCode(or Desc)|InstallType|Size"
+    /// - その他:    "ASSET|ItemCode(or Desc)|InstallType|Size"
     /// </summary>
     public static class QuantityKeyBuilder
     {
@@ -25,96 +25,102 @@ namespace UFlowPlant3D.Services
             string sizeRaw = PlantProp.GetString(dlm, oid, "サイズ", "Size", "NPS");
             string size = NormalizeSize(sizeRaw);
 
-            // -------------------------
             // Pipe
-            // -------------------------
             if (ent is Pipe)
             {
                 string mat = PlantProp.GetString(dlm, oid, "材料コード", "MaterialCode", "MAT_CODE");
                 return $"PIPE|{mat}|{install}|{size}";
             }
 
-            // -------------------------
+            string typeName = ent.GetType().Name;
+            string desc = PlantProp.GetString(dlm, oid, "部品仕様詳細", "PartFamilyLongDesc", "LONG_DESC", "ShortDescription");
+            string item = PlantProp.GetString(dlm, oid, "項目コード", "ItemCode", "ITEM_CODE");
+            string keyBase = !string.IsNullOrWhiteSpace(desc) ? desc : item;
+            if (string.IsNullOrWhiteSpace(keyBase)) keyBase = typeName;
+
+            // Fastener
+            if (IsFastener(dlm, oid, typeName))
+            {
+                string fastBase = !string.IsNullOrWhiteSpace(item) ? item : desc;
+                if (string.IsNullOrWhiteSpace(fastBase)) fastBase = typeName;
+                return $"FASTENER|{fastBase}|{install}|{size}";
+            }
+
             // Part（InlineAsset/ConnectorなどはPart継承が多い）
-            // -------------------------
             if (ent is Part part)
             {
-                string typeName = ent.GetType().Name;
-                string desc = PlantProp.GetString(dlm, oid, "部品仕様詳細", "PartFamilyLongDesc", "LONG_DESC");
-                string item = PlantProp.GetString(dlm, oid, "項目コード", "ItemCode", "ITEM_CODE");
-
-                // ---- Elbow：角度をキーへ
+                // Elbow
                 if (typeName.IndexOf("Elbow", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     string ang = NormalizeAngle(PlantProp.GetString(dlm, oid, "角度", "Angle", "PathAngle"));
-                    return $"ELBOW|{desc}|{install}|{size}|{ang}";
+                    return $"ELBOW|{keyBase}|{install}|{size}|{ang}";
                 }
 
-                // ---- Tee：枝管径までキーへ（Port indexで判定）
+                // Tee
                 if (typeName.IndexOf("Tee", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    string runNd = "";
-                    string brNd = "";
-
-                    // 1) Portから取れるならそれを優先
-                    try
-                    {
-                        var ports = PortUtil.ToPortArray(part.GetPorts(PortType.Static));
-                        if (ports.Length >= 3)
-                        {
-                            // ports[0], ports[1] = run、ports[2] = branch（あなたの仕様）
-                            runNd = NormalizeSize(ToInvariantString(ports[0].NominalDiameter));
-                            brNd = NormalizeSize(ToInvariantString(ports[2].NominalDiameter));
-                        }
-                    }
-                    catch
-                    {
-                        // NominalDiameter が無い/例外等は無視してfallbackへ
-                    }
-
-                    // 2) fallback: "100x50" 形式をSize文字列から分解
-                    if (string.IsNullOrEmpty(runNd) || string.IsNullOrEmpty(brNd))
-                    {
-                        var x = (sizeRaw ?? "").Replace(" ", "").Split('x', 'X');
-                        if (x.Length >= 2)
-                        {
-                            runNd = NormalizeSize(x[0]);
-                            brNd = NormalizeSize(x[1]);
-                        }
-                        else
-                        {
-                            runNd = size;
-                            brNd = "";
-                        }
-                    }
-
-                    return $"TEE|{desc}|{install}|{runNd}x{brNd}";
+                    var (runNd, brNd) = ExtractRunBranchNd(part, sizeRaw, size);
+                    return $"TEE|{keyBase}|{install}|{runNd}x{brNd}";
                 }
 
-                // ---- Joint系（必要に応じて増やしてOK）
-                if (typeName.IndexOf("Flange", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    typeName.IndexOf("Reducer", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    typeName.IndexOf("Coupling", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    typeName.IndexOf("BlindFlange", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return $"JOINT|{desc}|{install}|{size}";
-                }
-
-                // ---- その他Asset（Fastener含む）：基本は ItemCode + install
-                if (!string.IsNullOrEmpty(item))
-                    return $"ASSET|{item}|{install}";
-
-                // ItemCode が無ければ desc + install + size
-                if (!string.IsNullOrEmpty(desc))
-                    return $"ASSET|{desc}|{install}|{size}";
-
-                return $"ASSET|{typeName}|{install}|{size}";
+                // その他Asset
+                return $"ASSET|{keyBase}|{install}|{size}";
             }
 
-            // -------------------------
             // 最終fallback
-            // -------------------------
-            return $"UNKNOWN|{install}|{oid.Handle}";
+            return $"ASSET|{keyBase}|{install}|{size}";
+        }
+
+        private static (string runNd, string brNd) ExtractRunBranchNd(object part, string sizeRaw, string sizeFallback)
+        {
+            string runNd = "";
+            string brNd = "";
+
+            // 1) Portから取れるならそれを優先
+            try
+            {
+                var ports = PortUtil.ToPortObjects(TryInvokeGetPorts(part, PortType.Static));
+                if (ports.Count >= 3)
+                {
+                    runNd = NormalizeSize(ToInvariantString(TryGetPropertyValue(ports[0], "NominalDiameter")));
+                    brNd = NormalizeSize(ToInvariantString(TryGetPropertyValue(ports[2], "NominalDiameter")));
+                }
+            }
+            catch
+            {
+                // NominalDiameter が無い/例外等は無視してfallbackへ
+            }
+
+            // 2) fallback: "100x50" 形式をSize文字列から分解
+            if (string.IsNullOrEmpty(runNd) || string.IsNullOrEmpty(brNd))
+            {
+                var x = (sizeRaw ?? "").Replace(" ", "").Split('x', 'X');
+                if (x.Length >= 2)
+                {
+                    runNd = NormalizeSize(x[0]);
+                    brNd = NormalizeSize(x[1]);
+                }
+                else
+                {
+                    runNd = sizeFallback;
+                    brNd = "";
+                }
+            }
+
+            return (runNd, brNd);
+        }
+
+        private static bool IsFastener(DataLinksManager dlm, ObjectId oid, string typeName)
+        {
+            if (typeName.IndexOf("Fastener", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (typeName.IndexOf("Gasket", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (typeName.IndexOf("Bolt", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            var partType = PlantProp.GetString(dlm, oid, "PartType", "PartCategory", "ComponentType");
+            if (partType.IndexOf("Fastener", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (partType.IndexOf("Gasket", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            return false;
         }
 
         private static string NormalizeSize(string s)
@@ -122,7 +128,6 @@ namespace UFlowPlant3D.Services
             s = (s ?? "").Trim();
             if (string.IsNullOrEmpty(s)) return "";
 
-            // "10.0" -> "10"
             if (double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d))
             {
                 if (Math.Abs(d - Math.Round(d)) < 1e-9)
@@ -131,7 +136,6 @@ namespace UFlowPlant3D.Services
                 return d.ToString("0.###", CultureInfo.InvariantCulture);
             }
 
-            // "100 x 50" -> "100x50"
             return s.Replace(" ", "");
         }
 
@@ -151,34 +155,6 @@ namespace UFlowPlant3D.Services
             return s.Replace(" ", "");
         }
 
-        /// <summary>
-        /// Plant3DのGetPorts戻り値はバージョン/参照で Port[] とは限らないため、
-        /// IEnumerable を走査して Port[] に落とす。
-        /// </summary>
-        private static class PortUtil
-        {
-            public static Port[] ToPortArray(object portsObj)
-            {
-                if (portsObj == null) return Array.Empty<Port>();
-
-                // PortCollection 等は IEnumerable を実装していることが多い
-                if (portsObj is IEnumerable e)
-                {
-                    var list = new List<Port>();
-                    foreach (var x in e)
-                    {
-                        if (x is Port p) list.Add(p);
-                    }
-                    return list.ToArray();
-                }
-
-                return Array.Empty<Port>();
-            }
-        }
-
-        /// <summary>
-        /// IFormattable を見てから文字列化
-        /// </summary>
         private static string ToInvariantString(object v)
         {
             if (v == null) return "";
@@ -186,5 +162,50 @@ namespace UFlowPlant3D.Services
             return v.ToString();
         }
 
+        private static object TryInvokeGetPorts(object ent, PortType portType)
+        {
+            try
+            {
+                var mi = ent.GetType().GetMethod("GetPorts", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(PortType) }, null);
+                if (mi == null) return null;
+                return mi.Invoke(ent, new object[] { portType });
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static object TryGetPropertyValue(object obj, string propName)
+        {
+            try
+            {
+                var pi = obj.GetType().GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
+                return pi?.GetValue(obj);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static class PortUtil
+        {
+            public static List<object> ToPortObjects(object portsObj)
+            {
+                var list = new List<object>();
+                if (portsObj == null) return list;
+
+                if (portsObj is IEnumerable e)
+                {
+                    foreach (var x in e)
+                    {
+                        if (x != null) list.Add(x);
+                    }
+                }
+
+                return list;
+            }
+        }
     }
 }
