@@ -513,7 +513,7 @@ namespace UFlowPlant3D.Commands
                 // P3dConnector は材料集計対象外（Connector表現の混入対策）
                 if (string.Equals(info.EntityType, "P3dConnector", StringComparison.OrdinalIgnoreCase))
                 {
-                    ed.WriteMessage($@"\n[UFLOW][DBG] Skip P3dConnector in ComponentList: Handle={ent.Handle} RowId={rowIdEnt}");
+                    // ed.WriteMessage($@"\n[UFLOW][DBG] Skip P3dConnector in ComponentList: Handle={ent.Handle} RowId={rowIdEnt}");
                     continue;
                 }
 
@@ -571,7 +571,6 @@ namespace UFlowPlant3D.Commands
                     teeManhole = bool.TryParse(manholeStr, out bool b) && b;
                 }
                 sw.WriteLine(string.Join(",",
-<<<<<<< HEAD
                                     CsvEsc(info.HandleString),
                                     CsvEsc(info.EntityType),
                                     CsvEscQ(qtyId),
@@ -613,25 +612,6 @@ namespace UFlowPlant3D.Commands
                 string handleStr = "";
                 List<Point3d> portsF = null;
                 Point3d? midF = null;
-=======
-                    CsvEsc(info.HandleString),
-                    CsvEsc(info.EntityType),
-                    CsvEsc(qtyKey),
-                    CsvEsc(lineTag),
-                    CsvEsc(matCode),
-                    CsvEsc(itemCode),
-                    CsvEsc(desc),
-                    CsvEsc(size),
-                    CsvEsc(install),
-                    CsvEsc(angle),
-                    CsvD(info.ND1), CsvD(info.ND2), CsvD(info.ND3),
-                    CsvP(info.Start),
-                    CsvP(info.Mid),
-                    CsvP(info.End),
-                    CsvP(info.Branch),
-                    CsvP(info.Branch2)
-                ));
->>>>>>> origin/master
 
                 if (fastenerInstByRowId != null && fastenerInstByRowId.TryGetValue(rowId, out var inst) && inst != null)
                 {
@@ -747,18 +727,8 @@ namespace UFlowPlant3D.Commands
             var pipeSeenCountByKey = new Dictionary<string, int>(StringComparer.Ordinal);
             var qtyIdToAggKey = new Dictionary<string, string>(StringComparer.Ordinal);
 
-<<<<<<< HEAD
             // LineTag columns are shown only if present in the current model scan
             var lineTags = new SortedSet<string>(StringComparer.Ordinal);
-=======
-        private static string CsvEsc(string s)
-        {
-            s ??= "";
-            if (s.Contains(",") || s.Contains("\"") || s.Contains("\n"))
-                return "\"" + s.Replace("\"", "\"\"") + "\"";
-            return s;
-        }
->>>>>>> origin/master
 
             // Aggregations:
             //  key = qtyId|work|unit
