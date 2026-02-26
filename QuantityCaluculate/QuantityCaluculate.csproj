@@ -8,6 +8,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Commands\%28del%29UFLOW_DebugPickPortsCommands.cs" />
+    <Compile Remove="Commands\DebugFastenerCommands.cs" />
+    <Compile Remove="Commands\DebugFastenerGuidMapCommands.cs" />
+    <Compile Remove="Commands\DebugFastenerPnpScanCommands.cs" />
+    <Compile Remove="Commands\DebugGasketPropsCommands.cs" />
+    <Compile Remove="Commands\DebugPnpLinkFinderCommands.cs" />
+    <Compile Remove="Commands\DebugRowPropsCommands.cs" />
+    <Compile Remove="Commands\DlmDebugCommands.cs" />
+    <Compile Remove="Commands\PnP3dTypeDiagCommands.cs" />
+    <Compile Remove="Commands\PortDumpCommands.cs" />
+    <Compile Remove="Commands\PropDumpCommands.cs" />
+    <Compile Remove="Commands\UFlowDiagCommands.cs" />
+    <Compile Remove="Services\QuantityIdStore.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="accoremgd">
       <HintPath>..\..\..\..\..\..\AutoCAD Plant 3D 2026 Content\AutoCAD Plant 3D 2026 SDK\inc\AcCoreMgd.dll</HintPath>
     </Reference>

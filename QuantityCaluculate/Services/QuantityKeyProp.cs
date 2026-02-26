@@ -8,64 +8,192 @@ namespace UFlowPlant3D.Services
 {
     public static class QuantityKeyProp
     {
-        // DWG側に「無い場合に作る」保存先
         private const string XREC_DICT = "UFLOW";
-        private const string XREC_NAME = "QTYKEY";
-        private const string XREC_LEGACY_KEY = "UFLOW:数量ID";
+        private const string XREC_QTYID = "QTYID";
+        private const string XREC_QTYKEY = "QTYKEY";
+
+        // Plant側に作る（Project Setup）想定のプロパティ名候補
+        private static readonly string[] QTYID_PROP_CANDIDATES = { "数量ID", "QuantityID", "QTY_ID" };
+        private static readonly string[] QTYKEY_PROP_CANDIDATES = { "数量キー", "QtyKey", "QuantityKey", "QTY_KEY" };
+
+        // ---------------------------
+        // Entity(ObjectId) 用
+        // ---------------------------
 
         /// <summary>
-        /// 数量キー（文字列）を取得：
-        /// 1) Plant3Dプロパティ（数量ID/QuantityID/QTY_ID）を優先
-        /// 2) 無ければDWGのXRecordから
+        /// 数量ID（数値文字列）を取得。Plant側に無ければXRecordから読む。
         /// </summary>
-        public static string Get(DataLinksManager dlm, Transaction tr, ObjectId oid)
+        public static string GetQuantityId(DataLinksManager dlm, Transaction tr, ObjectId oid)
         {
-            var s = PlantProp.GetString(dlm, oid, "数量ID", "QuantityID", "QTY_ID");
-            if (!string.IsNullOrWhiteSpace(s)) return s;
+            var s = PlantProp.GetString(dlm, oid, QTYID_PROP_CANDIDATES);
+            if (!string.IsNullOrWhiteSpace(s) && !LooksLikeLegacyKey(s)) return s.Trim();
 
-            var fromDict = XRecordUtil.ReadString(tr, oid, XREC_DICT, XREC_NAME);
-            if (!string.IsNullOrWhiteSpace(fromDict)) return fromDict;
-
-            return XRecordUtil.ReadLegacyString(tr, oid, XREC_LEGACY_KEY) ?? "";
+            s = XRecordUtil.ReadString(tr, oid, XREC_DICT, XREC_QTYID);
+            return s?.Trim() ?? "";
         }
 
         /// <summary>
-        /// 数量キー（文字列）を設定：
-        /// 1) Plant3Dプロパティに書ければ書く
-        /// 2) 書けなければDWGのXRecordへ保存（=「無い場合は作る」）
+        /// 数量ID（数値文字列）をセット。Plant側に書けなければXRecordへ退避。
         /// </summary>
-        public static void Set(DataLinksManager dlm, Transaction tr, ObjectId oid, string key)
+        public static void SetQuantityId(DataLinksManager dlm, Transaction tr, ObjectId oid, string qtyId)
         {
-            key ??= "";
+            qtyId ??= "";
 
-            if (TrySetPlantProp(dlm, oid, "数量ID", key) ||
-                TrySetPlantProp(dlm, oid, "QuantityID", key) ||
-                TrySetPlantProp(dlm, oid, "QTY_ID", key))
+            // まずPlantへ
+            if (TryWritePlantQuantityId(dlm, oid, qtyId))
             {
+                // 念のためXRecordにも退避（復旧・比較に使える）
+                XRecordUtil.WriteString(tr, oid, XREC_DICT, XREC_QTYID, qtyId);
                 return;
             }
 
-            XRecordUtil.WriteString(tr, oid, XREC_DICT, XREC_NAME, key);
-            XRecordUtil.WriteLegacyString(tr, oid, XREC_LEGACY_KEY, key);
+            // Plantに書けないならXRecordで保持
+            XRecordUtil.WriteString(tr, oid, XREC_DICT, XREC_QTYID, qtyId);
+        }
+
+        /// <summary>
+        /// 集計キー文字列（PIPE|...）を取得（XRecord優先）。
+        /// </summary>
+        public static string GetKey(DataLinksManager dlm, Transaction tr, ObjectId oid)
+        {
+            var s = XRecordUtil.ReadString(tr, oid, XREC_DICT, XREC_QTYKEY);
+            if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+
+            // 互換：旧仕様で「数量ID」にキーが入っていた場合
+            s = PlantProp.GetString(dlm, oid, QTYID_PROP_CANDIDATES);
+            if (LooksLikeLegacyKey(s)) return s.Trim();
+
+            // もしProject Setupで「数量キー」を作っているならそこも読む
+            s = PlantProp.GetString(dlm, oid, QTYKEY_PROP_CANDIDATES);
+            if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+
+            return "";
+        }
+
+        /// <summary>
+        /// 集計キー文字列（PIPE|...）をXRecordへ保存。
+        /// </summary>
+        public static void SetKey(DataLinksManager dlm, Transaction tr, ObjectId oid, string key)
+        {
+            key ??= "";
+            XRecordUtil.WriteString(tr, oid, XREC_DICT, XREC_QTYKEY, key);
+        }
+
+        private static bool LooksLikeLegacyKey(string s)
+        {
+            // 旧仕様： "PIPE|STW|架設|1100" のようなパイプ区切り
+            return !string.IsNullOrWhiteSpace(s) && s.Contains("|");
+        }
+
+        // ---------------------------
+        // RowId(FastenerRow) 用
+        // ---------------------------
+
+        public static string GetRowQuantityId(DataLinksManager dlm, int rowId)
+        {
+            var s = PlantProp.GetString(dlm, rowId, QTYID_PROP_CANDIDATES);
+            if (!string.IsNullOrWhiteSpace(s) && !LooksLikeLegacyKey(s)) return s.Trim();
+            return "";
+        }
+
+        public static void SetRowQuantityId(DataLinksManager dlm, int rowId, string qtyId)
+        {
+            qtyId ??= "";
+            // RowId側はXRecordに退避できないので、書けるプロパティ名を順に試す
+            TryWriteRowQuantityId(dlm, rowId, qtyId);
+        }
+
+        // ---------------------------
+        // Backfill / Try-write helpers
+        // ---------------------------
+
+        /// <summary>
+        /// Plantプロパティ「数量ID」に"だけ"書く（XRecordは触らない）。存在しない/書けないなら false。
+        /// </summary>
+        public static bool TryWritePlantQuantityId(DataLinksManager dlm, ObjectId oid, string qtyId)
+        {
+            qtyId ??= "";
+            foreach (var name in QTYID_PROP_CANDIDATES)
+            {
+                if (TrySetPlantProp(dlm, oid, name, qtyId)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Plantプロパティ「数量キー」に"だけ"書く（任意）。存在しない/書けないなら false。
+        /// </summary>
+        public static bool TryWritePlantQuantityKey(DataLinksManager dlm, ObjectId oid, string key)
+        {
+            key ??= "";
+            foreach (var name in QTYKEY_PROP_CANDIDATES)
+            {
+                if (TrySetPlantProp(dlm, oid, name, key)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// rowId側の「数量ID」に"だけ"書く。存在しない/書けないなら false。
+        /// </summary>
+        public static bool TryWriteRowQuantityId(DataLinksManager dlm, int rowId, string qtyId)
+        {
+            qtyId ??= "";
+            foreach (var name in QTYID_PROP_CANDIDATES)
+            {
+                if (TrySetRow(dlm, rowId, name, qtyId)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// rowId側の「数量キー」に"だけ"書く（任意）。存在しない/書けないなら false。
+        /// </summary>
+        public static bool TryWriteRowQuantityKey(DataLinksManager dlm, int rowId, string key)
+        {
+            key ??= "";
+            foreach (var name in QTYKEY_PROP_CANDIDATES)
+            {
+                if (TrySetRow(dlm, rowId, name, key)) return true;
+            }
+            return false;
+        }
+
+        // ---------------------------
+        // Low-level SetProperties reflection
+        // ---------------------------
+
+        private static bool TrySetRow(DataLinksManager dlm, int rowId, string propName, string value)
+        {
+            try
+            {
+                var names = new StringCollection { propName };
+                var vals = new StringCollection { value };
+                if (InvokeSet(dlm, rowId, names, vals)) return true;
+
+                if (InvokeSet(dlm, rowId, new[] { propName }, new[] { value })) return true;
+                if (InvokeSet(dlm, rowId, new[] { propName }, new object[] { value })) return true;
+            }
+            catch { }
+            return false;
         }
 
         private static bool TrySetPlantProp(DataLinksManager dlm, ObjectId oid, string propName, string value)
         {
             try
             {
-                int? rowId = PlantProp.TryGetRowIdPublic(dlm, oid);
-                var ppoid = PlantProp.TryGetPpObjectId(dlm, oid);
+                var names = new StringCollection { propName };
+                var vals = new StringCollection { value };
+                if (InvokeSet(dlm, oid, names, vals)) return true;
 
-                if (rowId.HasValue && InvokeSet(dlm, rowId.Value, propName, value)) return true;
-                if (InvokeSet(dlm, oid, propName, value)) return true;
-                if (ppoid != null && InvokeSet(dlm, ppoid, propName, value)) return true;
+                if (InvokeSet(dlm, oid, new[] { propName }, new[] { value })) return true;
+                if (InvokeSet(dlm, oid, new[] { propName }, new object[] { value })) return true;
             }
             catch { }
-
             return false;
         }
 
-        private static bool InvokeSet(DataLinksManager dlm, object firstArg, string propName, string value)
+        private static bool InvokeSet(DataLinksManager dlm, object firstArg, object names, object vals)
         {
             try
             {
@@ -76,59 +204,15 @@ namespace UFlowPlant3D.Services
                     if (ps.Length != 3) continue;
 
                     if (!ps[0].ParameterType.IsInstanceOfType(firstArg)) continue;
+                    if (!ps[1].ParameterType.IsInstanceOfType(names)) continue;
+                    if (!ps[2].ParameterType.IsInstanceOfType(vals)) continue;
 
-                    var namesObj = BuildNames(ps[1].ParameterType, propName);
-                    var valuesObj = BuildValues(ps[2].ParameterType, value);
-
-                    if (namesObj == null || valuesObj == null) continue;
-
-                    mi.Invoke(dlm, new object[] { firstArg, namesObj, valuesObj });
+                    mi.Invoke(dlm, new object[] { firstArg, names, vals });
                     return true;
                 }
             }
             catch { }
-
             return false;
-        }
-
-        private static object BuildNames(Type targetType, string propName)
-        {
-            if (targetType == typeof(StringCollection))
-            {
-                return new StringCollection { propName };
-            }
-
-            if (targetType == typeof(string[]))
-            {
-                return new[] { propName };
-            }
-
-            if (targetType == typeof(object[]))
-            {
-                return new object[] { propName };
-            }
-
-            return null;
-        }
-
-        private static object BuildValues(Type targetType, string value)
-        {
-            if (targetType == typeof(StringCollection))
-            {
-                return new StringCollection { value };
-            }
-
-            if (targetType == typeof(string[]))
-            {
-                return new[] { value };
-            }
-
-            if (targetType == typeof(object[]))
-            {
-                return new object[] { value };
-            }
-
-            return null;
         }
     }
 
@@ -188,49 +272,6 @@ namespace UFlowPlant3D.Services
             {
                 xr = new Xrecord();
                 uflowDict.SetAt(recordName, xr);
-                tr.AddNewlyCreatedDBObject(xr, true);
-            }
-
-            xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, value ?? ""));
-        }
-
-        public static string ReadLegacyString(Transaction tr, ObjectId entId, string key)
-        {
-            var ent = tr.GetObject(entId, OpenMode.ForRead) as Entity;
-            if (ent == null || ent.ExtensionDictionary.IsNull) return null;
-
-            var dict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForRead) as DBDictionary;
-            if (dict == null || !dict.Contains(key)) return null;
-
-            var xr = tr.GetObject(dict.GetAt(key), OpenMode.ForRead) as Xrecord;
-            if (xr?.Data == null) return null;
-
-            var arr = xr.Data.AsArray();
-            if (arr == null || arr.Length == 0) return null;
-
-            return arr[0].Value as string;
-        }
-
-        public static void WriteLegacyString(Transaction tr, ObjectId entId, string key, string value)
-        {
-            var ent = tr.GetObject(entId, OpenMode.ForWrite) as Entity;
-            if (ent == null) return;
-
-            if (ent.ExtensionDictionary.IsNull)
-                ent.CreateExtensionDictionary();
-
-            var dict = tr.GetObject(ent.ExtensionDictionary, OpenMode.ForWrite) as DBDictionary;
-            if (dict == null) return;
-
-            Xrecord xr;
-            if (dict.Contains(key))
-            {
-                xr = tr.GetObject(dict.GetAt(key), OpenMode.ForWrite) as Xrecord;
-            }
-            else
-            {
-                xr = new Xrecord();
-                dict.SetAt(key, xr);
                 tr.AddNewlyCreatedDBObject(xr, true);
             }
 

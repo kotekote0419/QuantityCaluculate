@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Specialized;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -11,11 +10,25 @@ namespace UFlowPlant3D.Services
 {
     public static class PlantProp
     {
+        // ObjectId版
         public static string GetString(DataLinksManager dlm, ObjectId oid, params string[] candidates)
+            => GetStringCore(dlm, oid, null, candidates);
+
+        public static double? GetDouble(DataLinksManager dlm, ObjectId oid, params string[] candidates)
+            => GetDoubleCore(dlm, oid, null, candidates);
+
+        // rowId版（★FastenerRow用）
+        public static string GetString(DataLinksManager dlm, int rowId, params string[] candidates)
+            => GetStringCore(dlm, null, rowId, candidates);
+
+        public static double? GetDouble(DataLinksManager dlm, int rowId, params string[] candidates)
+            => GetDoubleCore(dlm, null, rowId, candidates);
+
+        private static string GetStringCore(DataLinksManager dlm, ObjectId? oid, int? rowId, params string[] candidates)
         {
             foreach (var name in candidates)
             {
-                if (TryGet(dlm, oid, name, out var v))
+                if (TryGet(dlm, oid, rowId, name, out var v))
                 {
                     var s = v?.ToString()?.Trim();
                     if (!string.IsNullOrEmpty(s)) return s;
@@ -24,11 +37,11 @@ namespace UFlowPlant3D.Services
             return "";
         }
 
-        public static double? GetDouble(DataLinksManager dlm, ObjectId oid, params string[] candidates)
+        private static double? GetDoubleCore(DataLinksManager dlm, ObjectId? oid, int? rowId, params string[] candidates)
         {
             foreach (var name in candidates)
             {
-                if (TryGet(dlm, oid, name, out var v))
+                if (TryGet(dlm, oid, rowId, name, out var v))
                 {
                     if (v == null) continue;
                     if (v is double d) return d;
@@ -38,59 +51,27 @@ namespace UFlowPlant3D.Services
             return null;
         }
 
-        // ---- public helper for other classes
-        public static int? TryGetRowIdPublic(DataLinksManager dlm, ObjectId oid) => TryGetRowId(dlm, oid);
-
-        public static object TryGetPpObjectId(DataLinksManager dlm, ObjectId oid)
-        {
-            // PpObjectId の取り方は環境差が大きいので反射で “あれば”
-            try
-            {
-                var mi = dlm.GetType().GetMethod("GetPpObjectId", BindingFlags.Public | BindingFlags.Instance, null,
-                    new[] { typeof(ObjectId) }, null);
-                if (mi != null) return mi.Invoke(dlm, new object[] { oid });
-            }
-            catch { }
-            return null;
-        }
-
-        // ---- core
-        private static bool TryGet(DataLinksManager dlm, ObjectId oid, string propName, out object value)
+        private static bool TryGet(DataLinksManager dlm, ObjectId? oid, int? rowId, string propName, out object value)
         {
             value = null;
+            if (dlm == null || string.IsNullOrWhiteSpace(propName)) return false;
 
-            int? rowId = TryGetRowId(dlm, oid);
-
-            // RowId版
-            if (rowId.HasValue)
+            // rowId優先
+            if (rowId.HasValue && rowId.Value > 0)
             {
                 if (TryGetFromProps(dlm, "GetAllProperties", new object[] { rowId.Value, true }, new[] { typeof(int), typeof(bool) }, propName, out value)) return true;
                 if (TryGetFromProps(dlm, "GetProperties", new object[] { rowId.Value, true }, new[] { typeof(int), typeof(bool) }, propName, out value)) return true;
                 if (TryGetValue(dlm, rowId.Value, propName, out value)) return value != null;
+                return false;
             }
 
-            // ObjectId版
-            if (TryGetFromProps(dlm, "GetAllProperties", new object[] { oid, true }, new[] { typeof(ObjectId), typeof(bool) }, propName, out value)) return true;
-            if (TryGetFromProps(dlm, "GetProperties", new object[] { oid, true }, new[] { typeof(ObjectId), typeof(bool) }, propName, out value)) return true;
-            if (TryGetValue(dlm, oid, propName, out value)) return value != null;
+            if (!oid.HasValue) return false;
+
+            if (TryGetFromProps(dlm, "GetAllProperties", new object[] { oid.Value, true }, new[] { typeof(ObjectId), typeof(bool) }, propName, out value)) return true;
+            if (TryGetFromProps(dlm, "GetProperties", new object[] { oid.Value, true }, new[] { typeof(ObjectId), typeof(bool) }, propName, out value)) return true;
+            if (TryGetValue(dlm, oid.Value, propName, out value)) return value != null;
 
             return false;
-        }
-
-        private static int? TryGetRowId(DataLinksManager dlm, ObjectId oid)
-        {
-            try
-            {
-                var mi = dlm.GetType().GetMethod("FindAcPpRowId", BindingFlags.Public | BindingFlags.Instance, null,
-                    new[] { typeof(ObjectId) }, null);
-                if (mi == null) return null;
-
-                var v = mi.Invoke(dlm, new object[] { oid });
-                if (v is int i && i > 0) return i;
-                if (v != null && int.TryParse(v.ToString(), out var ii) && ii > 0) return ii;
-            }
-            catch { }
-            return null;
         }
 
         private static bool TryGetFromProps(DataLinksManager dlm, string methodName, object[] args, Type[] sig, string key, out object value)
@@ -137,41 +118,41 @@ namespace UFlowPlant3D.Services
             catch { return false; }
         }
 
-        /// <summary>
-        /// GetAllProperties/GetProperties の戻り型差を吸収：
-        /// - IDictionary / StringDictionary
-        /// - NameValueCollection
-        /// - IEnumerable（要素が Name/Value 等を持つ）
-        /// </summary>
+        // ★大小文字無視で読む
         private static bool TryReadFromProps(object props, string key, out object value)
         {
             value = null;
-            if (props == null) return false;
+            if (props == null || string.IsNullOrWhiteSpace(key)) return false;
 
-            // IDictionary
             if (props is IDictionary dict)
             {
-                if (dict.Contains(key))
+                foreach (DictionaryEntry de in dict)
                 {
-                    value = dict[key];
-                    return true;
+                    var k = de.Key?.ToString();
+                    if (k == null) continue;
+                    if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = de.Value;
+                        return true;
+                    }
                 }
                 return false;
             }
 
-            // NameValueCollection
             if (props is NameValueCollection nvc)
             {
-                var s = nvc[key];
-                if (s != null)
+                foreach (var k in nvc.AllKeys)
                 {
-                    value = s;
-                    return true;
+                    if (k == null) continue;
+                    if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = nvc[k];
+                        return value != null;
+                    }
                 }
                 return false;
             }
 
-            // IEnumerable: 各要素から名前と値を拾う
             if (props is IEnumerable e)
             {
                 foreach (var item in e)
@@ -183,13 +164,13 @@ namespace UFlowPlant3D.Services
                             ?? GetPropString(item, "PropertyName")
                             ?? GetPropString(item, "DisplayName");
 
-                    if (!string.Equals(name, key, StringComparison.Ordinal)) continue;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (!string.Equals(name, key, StringComparison.OrdinalIgnoreCase)) continue;
 
                     value = GetPropObj(item, "Value")
                          ?? GetPropObj(item, "PropValue")
                          ?? GetPropObj(item, "PropertyValue");
 
-                    // 値が取れない場合は item 自体
                     value ??= item.ToString();
                     return true;
                 }
@@ -208,9 +189,6 @@ namespace UFlowPlant3D.Services
             catch { return null; }
         }
 
-        private static string GetPropString(object obj, string name)
-        {
-            return GetPropObj(obj, name)?.ToString();
-        }
+        private static string GetPropString(object obj, string name) => GetPropObj(obj, name)?.ToString();
     }
 }
